@@ -9,6 +9,7 @@
   "author": "Dustin Lacewell",
   "license": "ISC",
   "devDependencies": {
+    "@types/node": "^18.6.5",
     "ts-node": "^10.7.0",
     "typescript": "^4.6.3"
   },
