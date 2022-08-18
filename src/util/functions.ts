@@ -1,19 +1,3 @@
-// from https://coderrocketfuel.com/article/recursively-list-all-the-files-in-a-directory-using-node-js
-export const readDirRecursive = (dir: string, arr?: Array<string>): Array<string> => {
-    let files = fs.readdirSync(dir);
-    if(!arr) arr=[]
-
-    for (let file of files){
-        if (fs.statSync(`${dir}/${file}`).isDirectory()) {
-            arr = readDirRecursive(`${dir}/${file}`, arr)
-        } else {
-            arr.push(path.join(__dirname, dir, '/', file))
-        }
-    }
-
-    return arr;
-}
-
 // from https://stackoverflow.com/questions/57001515/sliding-window-over-array-in-javascript
 export const toWindows = (arr: Array<number>, size: number): Array<number[]> => {
     return Array.from(

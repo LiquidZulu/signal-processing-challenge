@@ -1,343 +1,179 @@
 import 'reflect-metadata'
-import { Container, inject, injectable } from 'inversify';
-import * as plt from 'matplotnode';
-import * as fs  from 'fs';
+import { Container, inject, multiInject, injectable } from 'inversify'
 import {
-    IDataAccess,
-    IDataReader,
-    IDirectoryReader,
+    // read
+    IReadData,
+    DataReaderLD,
+    IReadRaw,
+    RawReaderSync,
+
+    // transform
+    ITransformer,
+    VoltageSpikes,
     IPreProcessor,
-    ISpikeDetector,
+    SlidingWindowWA,
+    IAnalyser,
+    AnalyseSpikes,
     ISpikeStatistic,
-    ISignalStatistics,
-    IAnalyserAndOutput,
-    IOutput
-} from './interfaces/all'
-import { SERVICE_IDENTIFIER } from './constants/identifiers'
-import { readDirRecursive, toWindows, weightedAverage, sumArr } from './util/functions'
+    SpikeArea,
+    SpikeAvg,
+    SpikeMinMax,
+    ISpikeDetector,
+    DetectSpikes,
 
+    // output
+    IOutput,
+    GraphData,
+    MakeJSON
+} from './services'
+import { TFeature } from './types'
 
-const C = new Container();
-
-const conf = {
-    INPUT: {
-        dataDir: '../data' // `${process.cwd()}/data`
-    },
-    PRE_PROCESSOR: {
-        smoothing: {
-            windowSize: 7,
-            weights: [1,2,3,3,3,2,1],
-        }
-    },
-    PROCESSOR: {
-        spikeTolerance: 100
-    },
-    OUTPUT: {}
-}
-
-// read in data from the file
+const C = new Container()
 
 @injectable()
-class DirectoryReaderRecursive implements IDirectoryReader {
-    read(dir: string) {
-        return readDirRecursive(dir)
-    }
-}
-
-@injectable()
-class DataReaderLD implements IDataReader {
+class Application {
+    /*
+     * When making use of multiple transformers, one must specify
+     * the correct outputter for each, for example if I want to
+     * use t_1, t_2, and t_3, I would also need to bind o_1, o_2,
+     * and o_3. Note that this has not been tested as the
+     * specification only required a single transformation, but
+     * thats the idea anyway.
+     */
     constructor(
-        @inject(SERVICE_IDENTIFIER.IDirectoryReader) DirReader: IDirectoryReader
-    ){
-        this.directoryReader = DirReader
+        @inject(IReadData) DataReader: IReadData,
+        @multiInject(ITransformer) Transformers: Array<ITransformer>,
+        @multiInject(IOutput) Outputters: Array<IOutput>
+    ) {
+        // read
+        //  - from data/*.dat files
+
+        this.dataReader = DataReader
+
+
+        // transform
+        //  - pre-processing
+        //  - analysis
+        //    - getting a list of stats for desired features (here the only feature we care about is voltage spikes)
+
+        this.transformers = Transformers // transformers[i].analyser will provide the information on what features it covers
+
+
+        // output
+        //  - graph the data
+        //  - write a JSON of our statistics
+
+        this.outputters = Outputters
     }
 
-    read(dir:string) {
+    public run(conf?: { [key: string]: any }, _cb?: (result: any)=>void) {
 
-        const files = this.directoryReader.read(dir);
-        let rawData = ''
+        // read
+        //  - from data/*.dat files
 
-        for(let file of files){
-            rawData = `${rawData}\n${fs.readFileSync(file, {encoding:'utf8'}).trim()}`;
-        }
+        if(!conf?.READ.fileName) throw new Error('Application->run() requires conf.READ.fileName')
 
-        return rawData;
-    }
-
-    directoryReader: IDirectoryReader;
-}
-
-@injectable()
-class GetData implements IDataAccess {
-    constructor(
-        @inject(SERVICE_IDENTIFIER.IDataReader) DataReader: IDataReader
-    ){
-        this.reader = DataReader;
-    }
-
-    read(dir:string): Array<number> {
-
-        const rawData = this.reader.read(dir);
-        let numData = []
-
-        for(let i of rawData.split('\n')){
-            numData.push(Number(i.trim()))
-        }
-
-        return numData;
-    }
-
-    reader: IDataReader;
-}
+        const data = this.dataReader.read(conf.READ.fileName)
 
 
-// pre-processing
+        // transform
+        //  - pre-processing
+        //  - analysis
+        //    - getting a list of stats for desired features (here the only feature we care about is voltage spikes)
 
-@injectable()
-class SlidingWindowWA implements IPreProcessor {
-    constructor(DataGetter: IDataAccess) {
-        this.numData = DataGetter.read(conf.INPUT.dataDir);
-    }
+        let preProcDataArr: Array<number[]> = []
+        let analysedDataArr: Array<TFeature[]> = []
 
-    public proc(size: number, weights: Array<number>) {
-        const windowArr = toWindows(this.numData, size);
-        let procArr = []
+        for( let transformer of this.transformers ){
+            const [preProcData, analysedData] = transformer.proc(data, conf)
+            preProcDataArr.push(preProcData)
+            analysedDataArr.push(analysedData)
 
-        for(let window of windowArr){
-            procArr.push(weightedAverage(window, weights))
-        }
-
-        return procArr;
-    }
-
-    public numData: Array<number>;
-}
-
-
-// analysis
-
-@injectable()
-class DetectSpikes implements ISpikeDetector {
-    constructor(
-        @inject(SERVICE_IDENTIFIER.IPreProcessor) PreProcessor: IPreProcessor
-    ){
-        this.preProcessor = PreProcessor;
-    }
-
-    detect(): Array<number[]> {
-        const preProcData = this.preProcessor.proc(conf.PRE_PROCESSOR.smoothing.windowSize, conf.PRE_PROCESSOR.smoothing.weights);
-        let procData: Array<number[]> = [] // [[start_frame, end_frame], ...]
-
-        for(let i=0; i<preProcData.length - 2; i++){
-            if(preProcData[i+2] - preProcData[i] > conf.PROCESSOR.spikeTolerance) {
-                // i is start frame
-                let endFrame = 50;
-                for(let x=1; x<=50; x++){
-                    if (preProcData[i] > preProcData[i+1]) {
-                        endFrame = x;
-                        x = 51;
-                    }
-                }
-                procData.push([i,i+endFrame])
+            for( let outputter of this.outputters ){
+                console.log(outputter.output(data, preProcData, analysedData, conf), ' output finished.')
             }
         }
 
-        return procData
+
+        // do something when complete, if desired
+        if(!!_cb) _cb([data, preProcDataArr, analysedDataArr])
+        else console.log('Application complete')
     }
 
-    public preProcessor: IPreProcessor;
+    public dataReader: IReadData;
+    public transformers: Array<ITransformer>;
+    public outputters: Array<IOutput>;
 }
 
-@injectable()
-class SpikeMinMax implements ISpikeStatistic {
-    constructor(
-        @inject(SERVICE_IDENTIFIER.ISpikeDetector) SpikeDetector: ISpikeDetector
-    ) {
-        this.spikeDetector = SpikeDetector
-        this.statNames = ['min', 'max']
-    }
+// read
+C.bind(IReadData).to(DataReaderLD)
 
-    proc(): Array<number[]> {
-        const spikeArr = this.spikeDetector.detect()
-        const dataArr = this.spikeDetector.preProcessor.numData
-        const minMaxArr: Array<number[]> = [];
-        let [min, max]: number[] = [dataArr[0], dataArr[0]];
+C.bind(IReadRaw).to(RawReaderSync)
 
-        for(let spike of spikeArr) {
-            for(let i of dataArr.slice(spike[0],spike[1])) {
-                if (i !== min && i !== max) i < min ? min = i : max = i;
+
+// transform
+C.bind(ITransformer).to(VoltageSpikes)
+
+C.bind(IPreProcessor).to(SlidingWindowWA)
+
+C.bind(IAnalyser).to(AnalyseSpikes)
+
+C.bind(ISpikeStatistic).to(SpikeArea)
+C.bind(ISpikeStatistic).to(SpikeAvg)
+C.bind(ISpikeStatistic).to(SpikeMinMax)
+
+C.bind(ISpikeDetector).to(DetectSpikes)
+
+
+// output
+C.bind(IOutput).to(GraphData)
+C.bind(IOutput).to(MakeJSON)
+
+
+// application
+C.bind(Application).toSelf()
+
+const app = C.get(Application)
+
+try{
+    app.run({
+        READ: {
+            fileName: `${process.cwd()}/data/record-1.dat`
+        },
+        TRANSFORM: {
+            spikes: {
+                tolerance: 100
+            },
+            preProcessing: {
+                windowSize: 7,
+                weights: [1,2,3,3,3,2,1]
             }
-            minMaxArr.push([min, max])
+        },
+        OUTPUT: {
+            outGraph: `${process.cwd()}/output/record-1.png`,
+            outJSON: `${process.cwd()}/output/record-1.json`
         }
+    })
 
-        return minMaxArr;
-    }
-
-    public statNames: Array<string>;
-    public spikeDetector: ISpikeDetector;
-}
-
-@injectable()
-class SpikeAvg implements ISpikeStatistic {
-    constructor(
-        @inject(SERVICE_IDENTIFIER.ISpikeDetector) SpikeDetector: ISpikeDetector
-    ) {
-        this.spikeDetector = SpikeDetector
-        this.statNames = ['avg']
-    }
-
-    proc(): Array<number[]> {
-        const spikeArr = this.spikeDetector.detect()
-        const dataArr = this.spikeDetector.preProcessor.numData
-        const avgArr: Array<number[]> = [];
-
-        for(let spike of spikeArr) {
-            const thisSpike = dataArr.slice(spike[0],spike[1]);
-            avgArr.push([weightedAverage(thisSpike)])
-        }
-
-        return avgArr;
-    }
-
-    public statNames: Array<string>;
-    public spikeDetector: ISpikeDetector;
-}
-
-@injectable()
-class SpikeArea implements ISpikeStatistic {
-    constructor(
-        @inject(SERVICE_IDENTIFIER.ISpikeDetector) SpikeDetector: ISpikeDetector
-    ) {
-        this.spikeDetector = SpikeDetector
-        this.statNames = ['area']
-    }
-
-    proc(): Array<number[]> {
-        const spikeArr = this.spikeDetector.detect()
-        const dataArr = this.spikeDetector.preProcessor.numData
-        const areaArr: Array<number[]> = [];
-
-        for(let spike of spikeArr) {
-            const thisSpike = dataArr.slice(spike[0],spike[1]);
-            areaArr.push([sumArr(thisSpike)])
-        }
-
-        return areaArr;
-    }
-
-    public statNames: Array<string>;
-    public spikeDetector: ISpikeDetector;
-}
-
-@injectable()
-class SpikeInfo implements ISignalStatistics {
-    constructor(
-        @inject(SERVICE_IDENTIFIER.ISpikeDetector) SpikeDetector: ISpikeDetector,
-        @inject(SERVICE_IDENTIFIER.ISpikeStatistic) StatGrabbers: Array<ISpikeStatistic>
-    ) {
-        const spikeArr = SpikeDetector.detect()
-        const statArrs: number[][][] = []
-
-        for(let grabber of StatGrabbers){
-            statArrs.push(grabber.proc())
-        }
-
-        this.infoArr = []
-        this.statisticType = 'spikes'
-
-        for(let i=0; i < spikeArr.length; i++){
-            let info: { [key: string]: number } = {start: spikeArr[i][0], end: spikeArr[i][1]};
-
-            for(let j=0; j < statArrs.length; j++) { // [ [spike 0 stat 0, spike 0 stat 1, ...], ... ]
-                for(let k=0; k < statArrs[j][i].length; k++){ // enumerating through the group of stats being tracked
-                    info[StatGrabbers[j].statNames[k]] = statArrs[j][i][k]
-                }
+    app.run({
+        READ: {
+            fileName: `${process.cwd()}/data/record-2.dat`
+        },
+        TRANSFORM: {
+            spikes: {
+                tolerance: 100
+            },
+            preProcessing: {
+                windowSize: 7,
+                weights: [1,2,3,3,3,2,1]
             }
-            this.infoArr.push(info)
+        },
+        OUTPUT: {
+            outGraph: `${process.cwd()}/output/record-2.png`,
+            outJSON: `${process.cwd()}/output/record-2.json`
         }
-    }
+    })
 
-    public infoArr: Array<object>;
-    public statisticType: string;
+}catch(e){
+    console.error(e)
 }
-
-@injectable()
-class AnalyseData {
-    constructor(
-        @inject(SERVICE_IDENTIFIER.IAnalyserAndOutput) SignalAnalysersWithOutput: Array<IAnalyserAndOutput>,
-    ) {
-        for( let a of SignalAnalysersWithOutput ) {
-            for( let o of a.Output ) {
-                let report: { [key: string]: any } = { source: conf.INPUT.dataDir }
-                report[a.Analyser.statisticType] = a.Analyser.infoArr;
-                o.output(report)
-            }
-        }
-    }
-}
-
-@injectable()
-class OutputGraphAndJSON implements IOutput {
-    constructor(outDir: string, extraData?: {[key: string]: any}) {
-        this.outDir = outDir
-        !extraData ? this.extraData = {} : this.extraData = extraData
-    }
-
-    public output(r: {}) {
-        const outJSON = `${this.outDir}/output.json`
-        const outGraph = `${this.outDir}/output.png`
-
-        fs.writeFileSync(outJSON, JSON.stringify({...r, graph: outGraph}))
-        console.log(`${outJSON} has been written`)
-
-        if(!!this.extraData.dataToGraph){
-            plt.xkcd()
-            if(!!this.extraData.graphTitle){plt.title(this.extraData.graphTitle)}
-            plt.plot(
-                this.extraData.dataToGraph.map((_: any, i: number) => i),
-                this.extraData.dataToGraph
-            )
-            plt.legend()
-            plt.save(outGraph)
-            console.log(`${outGraph} has been written`)
-        }
-        else{
-            console.warn(`No graph data provided, ${outGraph} has not been written`)
-        }
-    }
-
-    public outDir: string;
-    public extraData: {[key: string]: any};
-}
-
-C.bind<IDirectoryReader>(SERVICE_IDENTIFIER.IDirectoryReader).to(DirectoryReaderRecursive);
-C.bind<IDataReader>(SERVICE_IDENTIFIER.IDataReader).to(DataReaderLD);
-C.bind<IDataAccess>(SERVICE_IDENTIFIER.IDataAccess).to(GetData);
-C.bind<IPreProcessor>(SERVICE_IDENTIFIER.IPreProcessor).to(SlidingWindowWA);
-C.bind<ISpikeDetector>(SERVICE_IDENTIFIER.ISpikeDetector).to(DetectSpikes);
-C.bind<ISpikeStatistic>(SERVICE_IDENTIFIER.ISpikeStatistic).to(SpikeMinMax);
-C.bind<ISpikeStatistic>(SERVICE_IDENTIFIER.ISpikeStatistic).to(SpikeAvg);
-C.bind<ISpikeStatistic>(SERVICE_IDENTIFIER.ISpikeStatistic).to(SpikeArea);
-C.bind<ISignalStatistics>(SERVICE_IDENTIFIER.ISignalStatistics).to(SpikeInfo);
-C.bind<AnalyseData>(Symbol.for('AnalyseData')).to(AnalyseData);
-C.bind<IOutput>(SERVICE_IDENTIFIER.IOutput).to(OutputGraphAndJSON);
-
-const analyse = C.get<AnalyseData>(Symbol.for('AnalyseData'));
-
-analyse()
-
-/*class Conductor {
-    constructor(
-        Input: IDataAccess,
-        PreProcessor: IPreProcessor,
-        Processor: IAnalyseData,
-        Output: IOutput,
-        Config: IConfig
-    ) {
-        this.rawData = Input.read(Config.INPUT.dataDir);
-        this.preProcData = PreProcessor.proc(Config.PRE_PROCESSOR.smoothing.windowSize, Config.PRE_PROCESSOR.smoothing.weights);
-        this.procData =
-    }
-
-    public data: Array<number>;
-}*/

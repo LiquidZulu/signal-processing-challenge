@@ -1,0 +1,27 @@
+{
+    "source": "/home/liquidzulu/Documents/signal-processing-challenge/data/record-1.dat",
+    "graph": "/home/liquidzulu/Documents/signal-processing-challenge/output/record-1.png",
+    "features": [
+        {
+            "name": "spikes",
+            "data": [
+                {
+                    "start": 1016,
+                    "end": 1022,
+                    "area": 1230.6666666666665,
+                    "avg": 205.1111111111111,
+                    "min": -28.8,
+                    "max": 518.1333333333333
+                },
+                {
+                    "start": 1027,
+                    "end": 1033,
+                    "area": 3115.4666666666662,
+                    "avg": 519.2444444444444,
+                    "min": -28.8,
+                    "max": 758.6666666666666
+                }
+            ]
+        }
+    ]
+}

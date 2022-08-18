@@ -4,18 +4,22 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "run": "ts-node ./src/index.ts"
   },
   "author": "Dustin Lacewell",
   "license": "ISC",
   "devDependencies": {
     "@types/node": "^18.6.5",
+    "@types/plotly.js": "^2.12.2",
     "ts-node": "^10.7.0",
     "typescript": "^4.6.3"
   },
   "dependencies": {
     "inversify": "^6.0.1",
     "matplotnode": "^0.4.2",
-    "reflect-metadata": "^0.1.13"
+    "nodeplotlib": "^1.1.2",
+    "plotly.js": "^2.14.0",
+    "reflect-metadata": "^0.1.13",
+    "typescript-graph": "^0.2.1"
   }
 }
